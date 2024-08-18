@@ -14,18 +14,22 @@ Use the following examples to make API calls:
 # Node.js
 node meeting.js
 node join.js
+node token.js
 
 # PHP
 php meeting.php
 php join.php
+php token.php
 
 # Python
 python3 meeting.py
 python3 join.py
+python3 token.py # rename token in something else
 
 # Bash
 ./meeting.sh
 ./join.sh
+./token.sh
 ```
 
 The server response will contain a meeting URL that can be embedded in your client using an iframe.
@@ -38,7 +42,7 @@ To embed a meeting in your service or app, use an iframe with the source attribu
 
 ```html
 <iframe
-    allow="camera; microphone; display-capture; fullscreen; clipboard-read; clipboard-write; autoplay"
+    allow="camera; microphone; display-capture; fullscreen; clipboard-read; clipboard-write; web-share; autoplay"
     src="https://p2p.mirotalk.com/join/test"
     style="height: 100vh; width: 100vw; border: 0px;"
 ></iframe>
@@ -52,7 +56,7 @@ Integrate video meetings into your website or application quickly by incorporati
 
 ```html
 <iframe
-    allow="camera; microphone; display-capture; fullscreen; clipboard-read; clipboard-write; autoplay"
+    allow="camera; microphone; display-capture; fullscreen; clipboard-read; clipboard-write; web-share; autoplay"
     src="https://p2p.mirotalk.com/newcall"
     style="height: 100vh; width: 100vw; border: 0px;"
 ></iframe>

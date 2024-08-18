@@ -9,7 +9,6 @@ http://patorjk.com/software/taag/#p=display&f=ANSI%20Regular&t=Server
 
 dependencies: {
     @sentry/node            : https://www.npmjs.com/package/@sentry/node
-    @sentry/integrations    : https://www.npmjs.com/package/@sentry/integrations
     axios                   : https://www.npmjs.com/package/axios
     body-parser             : https://www.npmjs.com/package/body-parser
     compression             : https://www.npmjs.com/package/compression
@@ -18,7 +17,9 @@ dependencies: {
     crypto-js               : https://www.npmjs.com/package/crypto-js
     dotenv                  : https://www.npmjs.com/package/dotenv
     express                 : https://www.npmjs.com/package/express
+    express-openid-connect  : https://www.npmjs.com/package/express-openid-connect
     jsonwebtoken            : https://www.npmjs.com/package/jsonwebtoken
+    js-yaml                 : https://www.npmjs.com/package/js-yaml
     ngrok                   : https://www.npmjs.com/package/ngrok
     qs                      : https://www.npmjs.com/package/qs
     openai                  : https://www.npmjs.com/package/openai
@@ -26,7 +27,6 @@ dependencies: {
     swagger                 : https://www.npmjs.com/package/swagger-ui-express
     uuid                    : https://www.npmjs.com/package/uuid
     xss                     : https://www.npmjs.com/package/xss
-    yamljs                  : https://www.npmjs.com/package/yamljs
 }
 */
 
@@ -39,7 +39,7 @@ dependencies: {
  * @license For commercial use or closed source, contact us at license.mirotalk@gmail.com or purchase directly from CodeCanyon
  * @license CodeCanyon: https://codecanyon.net/item/mirotalk-p2p-webrtc-realtime-video-conferences/38376661
  * @author  Miroslav Pejic - miroslav.pejic.85@gmail.com
- * @version 1.3.03
+ * @version 1.3.68
  *
  */
 
@@ -47,6 +47,7 @@ dependencies: {
 
 require('dotenv').config();
 
+const { auth, requiresAuth } = require('express-openid-connect');
 const { Server } = require('socket.io');
 const http = require('http');
 const https = require('https');
@@ -57,26 +58,51 @@ const path = require('path');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const app = express();
+const fs = require('fs');
 const checkXSS = require('./xss.js');
 const ServerApi = require('./api');
 const Host = require('./host');
 const Logs = require('./logs');
 const log = new Logs('server');
+
+// Email alerts and notifications
+const nodemailer = require('./lib/nodemailer');
+
 const packageJson = require('../../package.json');
 
 const domain = process.env.HOST || 'localhost';
-const isHttps = process.env.HTTPS == 'true';
+const isHttps = process.env.HTTPS == 'true'; // Use self-signed certificates instead of Certbot and Let's Encrypt
 const port = process.env.PORT || 3000; // must be the same to client.js signalingServerPort
 const host = `http${isHttps ? 's' : ''}://${domain}:${port}`;
 
-let server, authHost;
+const authHost = new Host(); // Authenticated IP by Login
+
+let server;
 
 if (isHttps) {
-    const fs = require('fs');
+    // Define paths to the SSL key and certificate files
+    const keyPath = path.join(__dirname, '../ssl/key.pem');
+    const certPath = path.join(__dirname, '../ssl/cert.pem');
+
+    // Check if SSL key file exists
+    if (!fs.existsSync(keyPath)) {
+        log.error('SSL key file not found.');
+        process.exit(1); // Exit the application if the key file is missing
+    }
+
+    // Check if SSL certificate file exists
+    if (!fs.existsSync(certPath)) {
+        log.error('SSL certificate file not found.');
+        process.exit(1); // Exit the application if the certificate file is missing
+    }
+
+    // Read SSL key and certificate files securely
     const options = {
-        key: fs.readFileSync(path.join(__dirname, '../ssl/key.pem'), 'utf-8'),
-        cert: fs.readFileSync(path.join(__dirname, '../ssl/cert.pem'), 'utf-8'),
+        key: fs.readFileSync(keyPath, 'utf-8'),
+        cert: fs.readFileSync(certPath, 'utf-8'),
     };
+
+    // Create HTTPS server using self-signed certificates
     server = https.createServer(options, app);
 } else {
     server = http.createServer(app);
@@ -145,15 +171,17 @@ const roomPresentersString = process.env.PRESENTERS || '["MiroTalk P2P"]';
 const roomPresenters = JSON.parse(roomPresentersString);
 
 // Swagger config
-const yamlJS = require('yamljs');
+const yaml = require('js-yaml');
 const swaggerUi = require('swagger-ui-express');
-const swaggerDocument = yamlJS.load(path.join(__dirname + '/../api/swagger.yaml'));
+const swaggerDocument = yaml.load(fs.readFileSync(path.join(__dirname, '/../api/swagger.yaml'), 'utf8'));
 
 // Api config
 const { v4: uuidV4 } = require('uuid');
 const apiBasePath = '/api/v1'; // api endpoint path
 const api_docs = host + apiBasePath + '/docs'; // api docs
 const api_key_secret = process.env.API_KEY_SECRET || 'mirotalkp2p_default_secret';
+const apiDisabledString = process.env.API_DISABLED || '["token", "meetings"]';
+const api_disabled = JSON.parse(apiDisabledString);
 
 // Ngrok config
 const ngrok = require('ngrok');
@@ -193,7 +221,6 @@ const redirectURL = process.env.REDIRECT_URL || '/newcall';
 
 // Sentry config
 const Sentry = require('@sentry/node');
-const { CaptureConsole } = require('@sentry/integrations');
 const sentryEnabled = getEnvBoolean(process.env.SENTRY_ENABLED);
 const sentryDSN = process.env.SENTRY_DSN;
 const sentryTracesSampleRate = process.env.SENTRY_TRACES_SAMPLE_RATE;
@@ -210,9 +237,8 @@ if (sentryEnabled) {
     Sentry.init({
         dsn: sentryDSN,
         integrations: [
-            new CaptureConsole({
-                // array of methods that should be captured
-                // defaults to ['log', 'info', 'warn', 'error', 'debug', 'assert']
+            Sentry.captureConsoleIntegration({
+                // ['log', 'info', 'warn', 'error', 'debug', 'assert']
                 levels: ['warn', 'error'],
             }),
         ],
@@ -251,6 +277,61 @@ const ipWhitelist = {
     enabled: getEnvBoolean(process.env.IP_WHITELIST_ENABLED),
     allowed: process.env.IP_WHITELIST_ALLOWED ? JSON.parse(process.env.IP_WHITELIST_ALLOWED) : [],
 };
+
+// OIDC - Open ID Connect
+const OIDC = {
+    enabled: process.env.OIDC_ENABLED ? getEnvBoolean(process.env.OIDC_ENABLED) : false,
+    config: {
+        issuerBaseURL: process.env.OIDC_ISSUER_BASE_URL,
+        clientID: process.env.OIDC_CLIENT_ID,
+        clientSecret: process.env.OIDC_CLIENT_SECRET,
+        baseURL: process.env.OIDC_BASE_URL,
+        secret: process.env.SESSION_SECRET,
+        authorizationParams: {
+            response_type: 'code',
+            scope: 'openid profile email',
+        },
+        authRequired: process.env.OIDC_AUTH_REQUIRED ? getEnvBoolean(process.env.OIDC_AUTH_REQUIRED) : false, // Set to true if authentication is required for all routes
+        auth0Logout: true, // Set to true to enable logout with Auth0
+        routes: {
+            callback: '/auth/callback', // Indicating the endpoint where your application will handle the callback from the authentication provider after a user has been authenticated.
+            login: false, // Dedicated route in your application for user login.
+            logout: '/logout', // Indicating the endpoint where your application will handle user logout requests.
+        },
+    },
+};
+
+// Custom middleware function for OIDC authentication
+function OIDCAuth(req, res, next) {
+    if (OIDC.enabled) {
+        // Apply requiresAuth() middleware conditionally
+        requiresAuth()(req, res, function () {
+            log.debug('[OIDC] ------> requiresAuth');
+            // Check if user is authenticated
+            if (req.oidc.isAuthenticated()) {
+                log.debug('[OIDC] ------> User isAuthenticated');
+                // User is authenticated
+                if (hostCfg.protected) {
+                    const ip = authHost.getIP(req);
+                    hostCfg.authenticated = true;
+                    authHost.setAuthorizedIP(ip, true);
+                    // Check...
+                    log.debug('[OIDC] ------> Host protected', {
+                        authenticated: hostCfg.authenticated,
+                        authorizedIPs: authHost.getAuthorizedIPs(),
+                        activeRoom: authHost.isRoomActive(),
+                    });
+                }
+                next();
+            } else {
+                // User is not authenticated
+                res.status(401).send('Unauthorized');
+            }
+        });
+    } else {
+        next();
+    }
+}
 
 // stats configuration
 const statsData = {
@@ -339,13 +420,80 @@ app.use((err, req, res, next) => {
     }
 });
 
+// OpenID Connect
+if (OIDC.enabled) {
+    try {
+        app.use(auth(OIDC.config));
+    } catch (err) {
+        log.error(err);
+        process.exit(1);
+    }
+}
+
+// Route to display user information
+app.get('/profile', OIDCAuth, (req, res) => {
+    if (OIDC.enabled) {
+        return res.json(req.oidc.user); // Send user information as JSON
+    }
+    res.sendFile(views.notFound);
+});
+
+// Authentication Callback Route
+app.get('/auth/callback', (req, res, next) => {
+    next(); // Let express-openid-connect handle this route
+});
+
+// Logout Route
+app.get('/logout', (req, res) => {
+    if (OIDC.enabled) {
+        //
+        if (hostCfg.protected) {
+            const ip = authHost.getIP(req);
+            if (authHost.isAuthorizedIP(ip)) {
+                authHost.deleteIP(ip);
+            }
+            hostCfg.authenticated = false;
+            //
+            log.debug('[OIDC] ------> Logout', {
+                authenticated: hostCfg.authenticated,
+                authorizedIPs: authHost.getAuthorizedIPs(),
+                activeRoom: authHost.isRoomActive(),
+            });
+        }
+        req.logout(); // Logout user
+    }
+    res.redirect('/'); // Redirect to the home page after logout
+});
+
 // main page
-app.get(['/'], (req, res) => {
-    if (hostCfg.protected) {
-        hostCfg.authenticated = false;
-        res.sendFile(views.login);
+app.get(['/'], OIDCAuth, (req, res) => {
+    if ((!OIDC.enabled && hostCfg.protected && !hostCfg.authenticated) || authHost.isRoomActive()) {
+        const ip = getIP(req);
+        if (allowedIP(ip)) {
+            res.sendFile(views.landing);
+            hostCfg.authenticated = true;
+        } else {
+            hostCfg.authenticated = false;
+            res.sendFile(views.login);
+        }
     } else {
         res.sendFile(views.landing);
+    }
+});
+
+// set new room name and join
+app.get(['/newcall'], OIDCAuth, (req, res) => {
+    if ((!OIDC.enabled && hostCfg.protected && !hostCfg.authenticated) || authHost.isRoomActive()) {
+        const ip = getIP(req);
+        if (allowedIP(ip)) {
+            res.sendFile(views.newCall);
+            hostCfg.authenticated = true;
+        } else {
+            hostCfg.authenticated = false;
+            res.sendFile(views.login);
+        }
+    } else {
+        res.sendFile(views.newCall);
     }
 });
 
@@ -358,21 +506,6 @@ app.get(['/stats'], (req, res) => {
 // mirotalk about
 app.get(['/about'], (req, res) => {
     res.sendFile(views.about);
-});
-
-// set new room name and join
-app.get(['/newcall'], (req, res) => {
-    if (hostCfg.protected) {
-        const ip = getIP(req);
-        if (allowedIP(ip)) {
-            res.sendFile(views.newCall);
-        } else {
-            hostCfg.authenticated = false;
-            res.sendFile(views.login);
-        }
-    } else {
-        res.sendFile(views.newCall);
-    }
 });
 
 // privacy policy
@@ -388,16 +521,22 @@ app.get(['/test'], (req, res) => {
     res.sendFile(views.stunTurn);
 });
 
-// no room name specified to join
-app.get('/join/', (req, res) => {
+// Handle Direct join room with params
+app.get('/join/', async (req, res) => {
     if (Object.keys(req.query).length > 0) {
         log.debug('Request Query', req.query);
         /* 
-            http://localhost:3000/join?room=test&name=mirotalk&audio=1&video=1&screen=0&notify=0&hide=1&token=token
+            http://localhost:3000/join?room=test&name=mirotalk&audio=1&video=1&screen=0&notify=0&hide=0
             https://p2p.mirotalk.com/join?room=test&name=mirotalk&audio=1&video=1&screen=0&notify=0&hide=0
             https://mirotalk.up.railway.app/join?room=test&name=mirotalk&audio=1&video=1&screen=0&notify=0&hide=0
         */
         const { room, name, audio, video, screen, notify, hide, token } = checkXSS(req.query);
+
+        const allowRoomAccess = isAllowedRoomAccess('/join/params', req, hostCfg, authHost, peers, room);
+
+        if (!allowRoomAccess && !token) {
+            return res.status(401).json({ message: 'Direct Room Join Unauthorized' });
+        }
 
         let peerUsername,
             peerPassword = '';
@@ -406,7 +545,15 @@ app.get('/join/', (req, res) => {
 
         if (token) {
             try {
-                const { username, password, presenter } = checkXSS(jwt.verify(token, jwtCfg.JWT_KEY));
+                // Check if valid JWT token
+                const validToken = await isValidToken(token);
+
+                // Not valid token
+                if (!validToken) {
+                    return res.status(401).json({ message: 'Invalid Token' });
+                }
+
+                const { username, password, presenter } = checkXSS(decodeToken(token));
                 // Peer credentials
                 peerUsername = username;
                 peerPassword = password;
@@ -421,11 +568,13 @@ app.get('/join/', (req, res) => {
             }
         }
 
+        const OIDCUserAuthenticated = OIDC.enabled && req.oidc.isAuthenticated();
+
         // Peer valid going to auth as host
-        if (hostCfg.protected && isPeerValid && isPeerPresenter && !hostCfg.authenticated) {
+        if ((hostCfg.protected && isPeerValid && isPeerPresenter && !hostCfg.authenticated) || OIDCUserAuthenticated) {
             const ip = getIP(req);
             hostCfg.authenticated = true;
-            authHost = new Host(ip, true);
+            authHost.setAuthorizedIP(ip, true);
             log.debug('Direct Join user auth as host done', {
                 ip: ip,
                 username: peerUsername,
@@ -441,19 +590,19 @@ app.get('/join/', (req, res) => {
             return res.sendFile(views.login);
         }
     }
-    if (hostCfg.protected) {
-        return res.sendFile(views.login);
-    }
-    res.redirect('/');
 });
 
 // Join Room by id
 app.get('/join/:roomId', function (req, res) {
-    // log.debug('Join to room', { roomId: req.params.roomId });
-    if (hostCfg.authenticated) {
+    //
+    const allowRoomAccess = isAllowedRoomAccess('/join/:roomId', req, hostCfg, authHost, peers, req.params.roomId);
+
+    if (allowRoomAccess) {
+        if (hostCfg.protected) authHost.setRoomActive();
+
         res.sendFile(views.client);
     } else {
-        if (hostCfg.protected) {
+        if (!OIDC.enabled && hostCfg.protected) {
             return res.sendFile(views.login);
         }
         res.redirect('/');
@@ -497,11 +646,13 @@ app.post(['/login'], (req, res) => {
     if (hostCfg.protected && isPeerValid && !hostCfg.authenticated) {
         const ip = getIP(req);
         hostCfg.authenticated = true;
-        authHost = new Host(ip, true);
-        log.debug('HOST LOGIN OK', { ip: ip, authorized: authHost.isAuthorized(ip) });
-        const token = jwt.sign({ username: username, password: password, presenter: true }, jwtCfg.JWT_KEY, {
-            expiresIn: jwtCfg.JWT_EXP,
+        authHost.setAuthorizedIP(ip, true);
+        log.debug('HOST LOGIN OK', {
+            ip: ip,
+            authorized: authHost.isAuthorizedIP(ip),
+            authorizedIps: authHost.getAuthorizedIPs(),
         });
+        const token = encodeToken({ username: username, password: password, presenter: true });
         return res.status(200).json({ message: token });
     }
 
@@ -509,9 +660,7 @@ app.post(['/login'], (req, res) => {
     if (isPeerValid) {
         log.debug('PEER LOGIN OK', { ip: ip, authorized: true });
         const isPresenter = roomPresenters && roomPresenters.includes(username).toString();
-        const token = jwt.sign({ username: username, password: password, presenter: isPresenter }, jwtCfg.JWT_KEY, {
-            expiresIn: jwtCfg.JWT_EXP,
-        });
+        const token = encodeToken({ username: username, password: password, presenter: isPresenter });
         return res.status(200).json({ message: token });
     } else {
         return res.status(401).json({ message: 'unauthorized' });
@@ -523,8 +672,72 @@ app.post(['/login'], (req, res) => {
     For api docs we use: https://swagger.io/
 */
 
+// request token endpoint
+app.post([`${apiBasePath}/token`], (req, res) => {
+    // Check if endpoint allowed
+    if (api_disabled.includes('token')) {
+        return res.status(403).json({
+            error: 'This endpoint has been disabled. Please contact the administrator for further information.',
+        });
+    }
+    // check if user was authorized for the api call
+    const { host, authorization } = req.headers;
+    const api = new ServerApi(host, authorization, api_key_secret);
+    if (!api.isAuthorized()) {
+        log.debug('MiroTalk get token - Unauthorized', {
+            header: req.headers,
+            body: req.body,
+        });
+        return res.status(403).json({ error: 'Unauthorized!' });
+    }
+    // Get Token
+    const token = api.getToken(req.body);
+    res.json({ token: token });
+    // log.debug the output if all done
+    log.debug('MiroTalk get token - Authorized', {
+        header: req.headers,
+        body: req.body,
+        token: token,
+    });
+});
+
+// request meetings list
+app.get([`${apiBasePath}/meetings`], (req, res) => {
+    // Check if endpoint allowed
+    if (api_disabled.includes('meetings')) {
+        return res.status(403).json({
+            error: 'This endpoint has been disabled. Please contact the administrator for further information.',
+        });
+    }
+    // check if user was authorized for the api call
+    const { host, authorization } = req.headers;
+    const api = new ServerApi(host, authorization, api_key_secret);
+    if (!api.isAuthorized()) {
+        log.debug('MiroTalk get meetings - Unauthorized', {
+            header: req.headers,
+            body: req.body,
+        });
+        return res.status(403).json({ error: 'Unauthorized!' });
+    }
+    // Get meetings
+    const meetings = api.getMeetings(peers);
+    res.json({ meetings: meetings });
+    // log.debug the output if all done
+    log.debug('MiroTalk get meetings - Authorized', {
+        header: req.headers,
+        body: req.body,
+        meetings: meetings,
+    });
+});
+
 // API request meeting room endpoint
 app.post([`${apiBasePath}/meeting`], (req, res) => {
+    // Check if endpoint allowed
+    if (api_disabled.includes('meeting')) {
+        return res.status(403).json({
+            error: 'This endpoint has been disabled. Please contact the administrator for further information.',
+        });
+    }
     const { host, authorization } = req.headers;
     const api = new ServerApi(host, authorization, api_key_secret);
     if (!api.isAuthorized()) {
@@ -545,6 +758,12 @@ app.post([`${apiBasePath}/meeting`], (req, res) => {
 
 // API request join room endpoint
 app.post([`${apiBasePath}/join`], (req, res) => {
+    // Check if endpoint allowed
+    if (api_disabled.includes('join')) {
+        return res.status(403).json({
+            error: 'This endpoint has been disabled. Please contact the administrator for further information.',
+        });
+    }
     const { host, authorization } = req.headers;
     const api = new ServerApi(host, authorization, api_key_secret);
     if (!api.isAuthorized()) {
@@ -571,6 +790,11 @@ app.post([`${apiBasePath}/join`], (req, res) => {
 //Slack request meeting room endpoint
 app.post('/slack', (req, res) => {
     if (!slackEnabled) return res.end('`Under maintenance` - Please check back soon.');
+
+    // Check if endpoint allowed
+    if (api_disabled.includes('slack')) {
+        return res.end('`This endpoint has been disabled`. Please contact the administrator for further information.');
+    }
 
     log.debug('Slack', req.headers);
 
@@ -623,6 +847,7 @@ function getServerConfig(tunnel = false) {
     return {
         iceServers: iceServers,
         stats: statsData,
+        oidc: OIDC.enabled ? OIDC : false,
         host: hostCfg,
         jwtCfg: jwtCfg,
         presenters: roomPresenters,
@@ -631,9 +856,9 @@ function getServerConfig(tunnel = false) {
             ngrok_enabled: ngrokEnabled,
             ngrok_token: ngrokEnabled ? ngrokAuthToken : '',
         },
-        server: host,
         cors: corsOptions,
         server_tunnel: tunnel,
+        server: host,
         test_ice_servers: testStunTurn,
         api_docs: api_docs,
         api_key_secret: api_key_secret,
@@ -732,8 +957,8 @@ io.sockets.on('connect', async (socket) => {
      */
     socket.on('disconnect', async (reason) => {
         for (let channel in socket.channels) {
-            await removePeerFrom(channel);
             removeIP(socket);
+            await removePeerFrom(channel);
         }
         log.debug('[' + socket.id + '] disconnected', { reason: reason });
         delete sockets[socket.id];
@@ -818,7 +1043,7 @@ io.sockets.on('connect', async (socket) => {
      */
     socket.on('join', async (cfg) => {
         // Get peer IPv4 (::1 Its the loopback address in ipv6, equal to 127.0.0.1 in ipv4)
-        const peer_ip = socket.handshake.headers['x-forwarded-for'] || socket.conn.remoteAddress;
+        const peer_ip = getSocketIP(socket);
 
         // Get peer Geo Location
         if (IPLookupEnabled && peer_ip != '::1') {
@@ -845,6 +1070,7 @@ io.sockets.on('connect', async (socket) => {
             peer_hand_status,
             peer_rec_status,
             peer_privacy_status,
+            peer_info,
         } = config;
 
         if (channel in socket.channels) {
@@ -862,13 +1088,25 @@ io.sockets.on('connect', async (socket) => {
         let is_presenter = true;
 
         // User Auth required, we check if peer valid
-        if (hostCfg.user_auth) {
+        if (hostCfg.user_auth || peer_token) {
             // Check JWT
             if (peer_token) {
                 try {
-                    const { username, password, presenter } = checkXSS(jwt.verify(peer_token, jwtCfg.JWT_KEY));
+                    const validToken = await isValidToken(peer_token);
+
+                    if (!validToken) {
+                        // redirect peer to login page
+                        return socket.emit('unauthorized');
+                    }
+
+                    const { username, password, presenter } = checkXSS(decodeToken(peer_token));
 
                     const isPeerValid = isAuthPeer(username, password);
+
+                    if (!isPeerValid) {
+                        // redirect peer to login page
+                        return socket.emit('unauthorized');
+                    }
 
                     // Presenter if token 'presenter' is '1'/'true' or first to join room
                     is_presenter =
@@ -881,11 +1119,6 @@ io.sockets.on('connect', async (socket) => {
                         peer_valid: isPeerValid,
                         peer_presenter: is_presenter,
                     });
-
-                    if (!isPeerValid) {
-                        // redirect peer to login page
-                        return socket.emit('unauthorized');
-                    }
                 } catch (err) {
                     // redirect peer to login page
                     log.error('[' + socket.id + '] [Warning] Join Room JWT error', err.message);
@@ -923,6 +1156,9 @@ io.sockets.on('connect', async (socket) => {
         // Check if peer is presenter, if token check the presenter key
         const isPresenter = peer_token ? is_presenter : await isPeerPresenter(channel, socket.id, peer_name, peer_uuid);
 
+        // Some peer info data
+        const { osName, osVersion, browserName, browserVersion } = peer_info;
+
         // collect peers info grp by channels
         peers[channel][socket.id] = {
             peer_name: peer_name,
@@ -935,6 +1171,8 @@ io.sockets.on('connect', async (socket) => {
             peer_hand_status: peer_hand_status,
             peer_rec_status: peer_rec_status,
             peer_privacy_status: peer_privacy_status,
+            os: osName ? `${osName} ${osVersion}` : '',
+            browser: browserName ? `${browserName} ${browserVersion}` : '',
         };
 
         const activeRooms = getActiveRooms();
@@ -968,6 +1206,17 @@ io.sockets.on('connect', async (socket) => {
             },
             //...
         });
+
+        // SCENARIO: Notify when the first user join room and is awaiting assistance...
+        if (peerCounts === 1) {
+            nodemailer.sendEmailAlert('join', {
+                room_id: channel,
+                peer_name: peer_name,
+                domain: socket.handshake.headers.host.split(':')[0],
+                os: osName ? `${osName} ${osVersion}` : '',
+                browser: browserName ? `${browserName} ${browserVersion}` : '',
+            }); // .env EMAIL_ALERT=true
+        }
     });
 
     /**
@@ -1044,6 +1293,8 @@ io.sockets.on('connect', async (socket) => {
                         password: password == peers[room_id]['password'] ? 'OK' : 'KO',
                     };
                     await sendToPeer(socket.id, sockets, 'roomAction', data);
+                    break;
+                default:
                     break;
             }
         } catch (err) {
@@ -1135,6 +1386,8 @@ io.sockets.on('connect', async (socket) => {
                             break;
                         case 'privacy':
                             peers[room_id][peer_id]['peer_privacy_status'] = status;
+                            break;
+                        default:
                             break;
                     }
                 }
@@ -1254,6 +1507,13 @@ io.sockets.on('connect', async (socket) => {
         await sendToRoom(room_id, socket.id, 'fileAbort');
     });
 
+    socket.on('fileReceiveAbort', async (cfg) => {
+        const config = checkXSS(cfg);
+        const { room_id, peer_name } = config;
+        log.debug('[' + socket.id + '] Peer [' + peer_name + '] send fileReceiveAbort to room_id [' + room_id + ']');
+        await sendToRoom(room_id, socket.id, 'fileReceiveAbort', config);
+    });
+
     /**
      * Relay video player action
      */
@@ -1353,6 +1613,8 @@ io.sockets.on('connect', async (socket) => {
                         delete peers[channel]; // clean lock and password value from the room
                         delete presenters[channel]; // clean the presenter from the channel
                     }
+                    break;
+                default:
                     break;
             }
         } catch (err) {
@@ -1518,6 +1780,77 @@ function isAuthPeer(username, password) {
 }
 
 /**
+ * Check if valid JWT token
+ * @param {string} token
+ * @returns boolean
+ */
+async function isValidToken(token) {
+    return new Promise((resolve, reject) => {
+        jwt.verify(token, jwtCfg.JWT_KEY, (err, decoded) => {
+            if (err) {
+                // Token is invalid
+                resolve(false);
+            } else {
+                // Token is valid
+                resolve(true);
+            }
+        });
+    });
+}
+
+/**
+ * Encode JWT token payload
+ * @param {object} token
+ * @returns
+ */
+function encodeToken(token) {
+    if (!token) return '';
+
+    const { username = 'username', password = 'password', presenter = false, expire } = token;
+
+    const expireValue = expire || jwtCfg.JWT_EXP;
+
+    // Constructing payload
+    const payload = {
+        username: String(username),
+        password: String(password),
+        presenter: String(presenter),
+    };
+
+    // Encrypt payload using AES encryption
+    const payloadString = JSON.stringify(payload);
+    const encryptedPayload = CryptoJS.AES.encrypt(payloadString, jwtCfg.JWT_KEY).toString();
+
+    // Constructing JWT token
+    const jwtToken = jwt.sign({ data: encryptedPayload }, jwtCfg.JWT_KEY, { expiresIn: expireValue });
+
+    return jwtToken;
+}
+
+/**
+ * Decode JWT Payload data
+ * @param {object} jwtToken
+ * @returns mixed
+ */
+function decodeToken(jwtToken) {
+    if (!jwtToken) return null;
+
+    // Verify and decode the JWT token
+    const decodedToken = jwt.verify(jwtToken, jwtCfg.JWT_KEY);
+    if (!decodedToken || !decodedToken.data) {
+        throw new Error('Invalid token');
+    }
+
+    // Decrypt the payload using AES decryption
+    const decryptedPayload = CryptoJS.AES.decrypt(decodedToken.data, jwtCfg.JWT_KEY).toString(CryptoJS.enc.Utf8);
+
+    // Parse the decrypted payload as JSON
+    const payload = JSON.parse(decryptedPayload);
+
+    return payload;
+}
+
+/**
  * Get All connected peers count grouped by roomId
  * @return {object} array
  */
@@ -1538,12 +1871,64 @@ function getActiveRooms() {
 }
 
 /**
+ * Check if Allowed Room Access
+ * @param {string} logMessage
+ * @param {object} req
+ * @param {object} hostCfg
+ * @param {class} authHost
+ * @param {object} roomList
+ * @param {string} roomId
+ * @returns boolean true/false
+ */
+function isAllowedRoomAccess(logMessage, req, hostCfg, authHost, peers, roomId) {
+    const OIDCUserAuthenticated = OIDC.enabled && req.oidc.isAuthenticated();
+    const hostUserAuthenticated = hostCfg.protected && hostCfg.authenticated;
+    const roomActive = authHost.isRoomActive();
+    const roomExist = roomId in peers;
+    const roomCount = Object.keys(peers).length;
+
+    log.debug(logMessage, {
+        OIDCUserEnabled: OIDC.enabled,
+        OIDCUserAuthenticated: OIDCUserAuthenticated,
+        hostUserAuthenticated: hostUserAuthenticated,
+        hostProtected: hostCfg.protected,
+        hostAuthenticated: hostCfg.authenticated,
+        roomActive: roomActive,
+        roomExist: roomExist,
+        roomCount: roomCount,
+        roomId: roomId,
+    });
+
+    const allowRoomAccess =
+        (!hostCfg.protected && !OIDC.enabled) || // No host protection and OIDC mode enabled (default)
+        OIDCUserAuthenticated || // User authenticated via OIDC
+        hostUserAuthenticated || // User authenticated via Login
+        ((OIDCUserAuthenticated || hostUserAuthenticated) && roomCount === 0) || // User authenticated joins the first room
+        roomExist; // User Or Guest join an existing Room
+
+    return allowRoomAccess;
+}
+
+/**
  * Get ip
  * @param {object} req
  * @returns string ip
  */
 function getIP(req) {
-    return req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    return req.headers['x-forwarded-for'] || req.headers['X-Forwarded-For'] || req.socket.remoteAddress || req.ip;
+}
+
+/**
+ * Get IP from socket
+ * @param {object} socket
+ * @returns string
+ */
+function getSocketIP(socket) {
+    return (
+        socket.handshake.headers['x-forwarded-for'] ||
+        socket.handshake.headers['X-Forwarded-For'] ||
+        socket.handshake.address
+    );
 }
 
 /**
@@ -1552,7 +1937,10 @@ function getIP(req) {
  * @returns boolean
  */
 function allowedIP(ip) {
-    return authHost != null && authHost.isAuthorized(ip);
+    const authorizedIPs = authHost.getAuthorizedIPs();
+    const authorizedIP = authHost.isAuthorizedIP(ip);
+    log.info('Allowed IPs', { ip: ip, authorizedIP: authorizedIP, authorizedIPs: authorizedIPs });
+    return authHost != null && authorizedIP;
 }
 
 /**
@@ -1561,12 +1949,15 @@ function allowedIP(ip) {
  */
 function removeIP(socket) {
     if (hostCfg.protected) {
-        const ip = socket.handshake.address;
-        log.debug('Host protected check ip', { ip: ip });
+        const ip = getSocketIP(socket);
+        log.debug('[removeIP] - Host protected check ip', { ip: ip });
         if (ip && allowedIP(ip)) {
             authHost.deleteIP(ip);
             hostCfg.authenticated = false;
-            log.debug('Remove IP from auth', { ip: ip });
+            log.info('[removeIP] - Remove IP from auth', {
+                ip: ip,
+                authorizedIps: authHost.getAuthorizedIPs(),
+            });
         }
     }
 }

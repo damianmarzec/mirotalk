@@ -1,18 +1,78 @@
 'use strict';
 
-const Logs = require('./logs');
-const log = new Logs('Host');
-
 module.exports = class Host {
-    constructor(ip, authorized) {
-        this.auth = new Map();
-        this.auth.set(ip, authorized);
-        //log.debug('AUTH ---> ', this.auth.get(ip));
+    constructor() {
+        this.authorizedIPs = new Map();
+        this.roomActive = false;
     }
-    isAuthorized(ip) {
-        return this.auth.has(ip);
+
+    /**
+     * Get IP from req
+     * @param {object} req
+     * @returns string IP
+     */
+    getIP(req) {
+        return req.headers['x-forwarded-for'] || req.headers['X-Forwarded-For'] || req.socket.remoteAddress || req.ip;
     }
+
+    /**
+     * Get authorized IPs
+     * @returns object
+     */
+    getAuthorizedIPs() {
+        return Object.fromEntries(this.authorizedIPs);
+    }
+
+    /**
+     * Set authorized IP
+     * @param {string} ip
+     * @param {boolean} authorized
+     */
+    setAuthorizedIP(ip, authorized) {
+        this.authorizedIPs.set(ip, authorized);
+        this.setRoomActive();
+    }
+
+    /**
+     * Check if IP is authorized
+     * @param {string} ip
+     * @returns boolean
+     */
+    isAuthorizedIP(ip) {
+        return this.authorizedIPs.has(ip);
+    }
+
+    /**
+     * Host room status
+     * @returns boolean
+     */
+    isRoomActive() {
+        return this.roomActive;
+    }
+
+    /**
+     * Set host room activate
+     */
+    setRoomActive() {
+        this.roomActive = true;
+    }
+
+    /**
+     * Set host room deactivate
+     */
+    setRoomDeactivate() {
+        this.roomActive = false;
+    }
+
+    /**
+     * Delete ip from authorized IPs
+     * @param {string} ip
+     * @returns boolean
+     */
     deleteIP(ip) {
-        return this.auth.delete(ip);
+        if (this.isAuthorizedIP(ip)) {
+            this.setRoomDeactivate();
+        }
+        return this.authorizedIPs.delete(ip);
     }
 };
