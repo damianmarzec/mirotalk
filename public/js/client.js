@@ -163,14 +163,14 @@ const buttons = {
         showFileShareBtn: true,
         showDocumentPipBtn: showDocumentPipBtn,
         showMySettingsBtn: true,
-        showAboutBtn: true, // Please keep me always true, Thank you!
+        showAboutBtn: false, // Please keep me always true, Thank you!
     },
     chat: {
         showMaxBtn: true,
         showSaveMessageBtn: true,
-        showMarkDownBtn: true,
-        showChatGPTBtn: true,
-        showFileShareBtn: true,
+        showMarkDownBtn: false,
+        showChatGPTBtn: false,
+        showFileShareBtn: false,
         showShareVideoAudioBtn: true,
         showParticipantsBtn: true,
     },
@@ -195,7 +195,7 @@ const buttons = {
         videoBtnClickAllowed: true,
         showKickOutBtn: true,
         showSnapShotBtn: true,
-        showFileShareBtn: true,
+        showFileShareBtn: false,
         showShareVideoAudioBtn: true,
         showPrivateMessageBtn: true,
         showZoomInOutBtn: false,
