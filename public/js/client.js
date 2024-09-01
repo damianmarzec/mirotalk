@@ -1498,19 +1498,19 @@ async function whoAreYou() {
         allowOutsideClick: false,
         allowEscapeKey: false,
         background: swBg,
-        title: 'MiroTalk P2P',
+        title: 'Dialer',
         position: 'center',
         input: 'text',
-        inputPlaceholder: 'Enter your email or name',
+        inputPlaceholder: 'Podaj Email lub Imię',
         inputAttributes: { maxlength: 32 },
         inputValue: window.localStorage.peer_name ? window.localStorage.peer_name : '',
         html: initUser, // inject html
-        confirmButtonText: `Join meeting`,
+        confirmButtonText: `Dołącz do spotkania`,
         customClass: { popup: 'init-modal-size' },
         showClass: { popup: 'animate__animated animate__fadeInDown' },
         hideClass: { popup: 'animate__animated animate__fadeOutUp' },
         inputValidator: async (value) => {
-            if (!value) return 'Please enter your email or name';
+            if (!value) return 'Proszę podaj imię';
             // Long name
             if (value.length > 30) return 'Name must be max 30 char';
 
@@ -1525,7 +1525,7 @@ async function whoAreYou() {
 
             // check if peer name is already in use in the room
             if (await checkUserName()) {
-                return 'Username is already in use!';
+                return 'To imię jest zajęte!';
             } else {
                 window.localStorage.peer_name = myPeerName;
                 whoAreYouJoin();
