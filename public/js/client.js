@@ -148,17 +148,17 @@ const showDocumentPipBtn = !isEmbedded && 'documentPictureInPicture' in window;
  */
 const buttons = {
     main: {
-        showShareRoomBtn: true,
-        showHideMeBtn: true,
+        showShareRoomBtn: false,
+        showHideMeBtn: false,
         showAudioBtn: true,
         showVideoBtn: true,
         showScreenBtn: true,
-        showRecordStreamBtn: true,
+        showRecordStreamBtn: false,
         showChatRoomBtn: true,
         showCaptionRoomBtn: true,
         showRoomEmojiPickerBtn: true,
         showMyHandBtn: true,
-        showWhiteboardBtn: true,
+        showWhiteboardBtn: false,
         showSnapshotRoomBtn: true,
         showFileShareBtn: true,
         showDocumentPipBtn: showDocumentPipBtn,
