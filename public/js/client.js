@@ -985,7 +985,7 @@ function getRoomId() {
 
     // skip /join/
     let roomId = queryRoomId ? queryRoomId : window.location.pathname.substring(6);
-
+    // console.log('ROOM ID:' + roomId);
     // if not specified room id, create one random
     if (roomId == '') {
         roomId = makeId(20);
@@ -1921,6 +1921,34 @@ async function whoAreYouJoin() {
     handleHideMe(isHideMeActive);
 }
 
+// Function to get the 'u' parameter from the current URL
+function getUParameter() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('u');
+}
+function getDomain() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const domain = atob(urlParams.get('domain'));
+    if (domain !== 'dev3.local' && domain !== 'panel-sg.marzec.dev') {
+        alert('Problem D813 (domena)');
+        return '';
+    }
+
+    return domain;
+}
+
+// Function to send the request
+function sendRequest() {
+    const uValue = getUParameter();
+    const domain = getDomain();
+    const url = `https://${domain}/api/updateCallTime/${uValue}/${roomId}`; // Replace with your actual API endpoint
+    console.log('Sending request to API: '+url);
+    fetch(url)
+        .then(response => response.json())
+        .then(data => console.log('Response:', data))
+        .catch(error => console.error('Error:', error));
+}
+
 /**
  * join to channel and send some peer info
  */
@@ -1944,6 +1972,9 @@ async function joinToChannel() {
         peer_privacy_status: isVideoPrivacyActive,
         userAgent: userAgent,
     });
+
+    // Set up the interval to send requests every 4 seconds
+    setInterval(sendRequest, 5000);
     handleBodyOnMouseMove(); // show/hide buttonsBar, bottomButtons ...
 }
 
